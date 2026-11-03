@@ -305,6 +305,6 @@
  	printf("SWEET TOUCH: probe 0x38 err=%d/%d chip-id=%02x:%02x irq=%#x\n",
  	    fe1, fe2, fid1, fid2, st.irq_status);
 +	st.probing = false;
- 	bool goodix = !ge && gid[0] == '9' && gid[1] == '8' && gid[2] == '9' && gid[3] == '6';
+ 	bool goodix = !ge;
  	bool fts = !fe1 && !fe2 && fid1 == 0x54 && fid2 == 0x52;
  	if (st.dead || goodix == fts) {
