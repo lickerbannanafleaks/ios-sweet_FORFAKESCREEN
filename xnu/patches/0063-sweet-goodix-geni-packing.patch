@@ -15,7 +15,7 @@
  #define TOUCH_FTS        2
 +/* GT9896 is Yellowstone in Xiaomi sweet-r-oss, not the Berlin protocol. */
 +#define GOODIX_PID_REG   0x4022u
-+#define GOODIX_EVENT_REG 0x4180u
++#define GOODIX_EVENT_REG 0x4100u
 +#define GOODIX_HEAD_LEN  8u
 +#define GOODIX_POINT_LEN 8u
  
