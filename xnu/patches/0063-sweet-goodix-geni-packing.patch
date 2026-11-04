@@ -6,7 +6,7 @@
  #define TOUCH_FTS        2
 -/* GT9896 is Yellowstone in Xiaomi sweet-r-oss, not the Berlin protocol. */
 -#define GOODIX_PID_REG   0x4022u
--#define GOODIX_EVENT_REG 0x4100u
+-#define GOODIX_EVENT_REG 0x4180u
 -#define GOODIX_HEAD_LEN  8u
 +/* Patched event configurations for aftermarket controller profiles */
 +#define GOODIX_PID_REG   0x4022u
@@ -50,7 +50,6 @@
  	for (unsigned i = 0; i < n; ++i) {
  
 @@ -597,7 +601,7 @@
- 	int fe2 = touch_read(0x38, 0xa3, false, &fid2, 1);
  	int fe2 = touch_read(0x38, 0x9f, false, &fid2, 1);
  	printf("SWEET TOUCH: probe 0x38 err=%d/%d chip-id=%02x:%02x irq=%#x\n",
  	    fe1, fe2, fid1, fid2, st.irq_status);
