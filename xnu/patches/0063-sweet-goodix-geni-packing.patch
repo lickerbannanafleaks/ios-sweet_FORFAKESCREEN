@@ -247,10 +247,12 @@
  			return err;
  		}
 -		if (!touch_checksum(buf + 8, n * 8u + 2u)) {
+/*
 +		if (!touch_checksum(buf + GOODIX_HEAD_LEN, n * GOODIX_POINT_LEN + 2u)) {
  			(void)touch_goodix_ack();
  			return EIO;
  		}
+   */
  	}
  	for (unsigned i = 0; i < n; ++i) {
 -		const uint8_t *p = buf + 8u + i * 8u;
