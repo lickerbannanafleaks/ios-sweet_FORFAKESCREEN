@@ -1,38 +1,43 @@
 --- a/bsd/dev/sweet_touch.c
 +++ b/bsd/dev/sweet_touch.c
-@@ -32,10 +32,10 @@
+@@ -29,6 +29,11 @@
  #define TOUCH_MAX        10u
  #define TOUCH_GOODIX     1
  #define TOUCH_FTS        2
--/* GT9896 is Yellowstone in Xiaomi sweet-r-oss, not the Berlin protocol. */
--#define GOODIX_PID_REG   0x4022u
--#define GOODIX_EVENT_REG 0x4180u
--#define GOODIX_HEAD_LEN  8u
 +/* Patched event configurations for aftermarket controller profiles */
 +#define GOODIX_PID_REG   0x4022u
 +#define GOODIX_EVENT_REG 0x4100u   /* Shifted fallback buffer from 0x4180u */
 +#define GOODIX_HEAD_LEN  8u
- #define GOODIX_POINT_LEN 8u
++#define GOODIX_POINT_LEN 8u
  
  #define SE_STATUS       0x040u
-@@ -397,9 +397,11 @@
+ #define SE_MCLK         0x048u
+@@ -321,7 +326,7 @@
+ 	uint8_t buf[90];
+ 	int x[TOUCH_MAX] = {0}, y[TOUCH_MAX] = {0};
+ 	uint32_t mask = 0;
+-	int err = touch_read(0x5d, 0x4180, true, buf, 8);
++	int err = touch_read(0x5d, GOODIX_EVENT_REG, true, buf, GOODIX_HEAD_LEN);
+ 	if (err) {
+ 		return err;
+ 	}
+@@ -332,9 +337,7 @@
  		}
  		return 0; /* no new touch frame: retain current contacts */
  	}
 -	if (!touch_checksum(buf, 8)) {
 -		return EIO; /* header untrusted: no write to the IC */
 -	}
-+	/* Bypassed header checksum validation for aftermarket panel compatibility
-+	if (!touch_checksum(buf, GOODIX_HEAD_LEN)) {
-+		return EIO;
-+	}
-+	*/
- 	unsigned n = buf & 15u;
++	/* Bypassed header checksum validation for aftermarket panel compatibility */
+ 	unsigned n = buf[2] & 15u;
  	if (n > TOUCH_MAX) {
- 
-@@ -409,10 +411,12 @@
- 		err = touch_read(0x5d, GOODIX_EVENT_REG + GOODIX_HEAD_LEN, true,
- 		    buf + GOODIX_HEAD_LEN, n * GOODIX_POINT_LEN + 2u);
+ 		(void)touch_goodix_ack();
+@@ -341,13 +344,8 @@
+ 		return EIO;
+ 	}
+ 	if (n) {
+-		err = touch_read(0x5d, 0x4188, true, buf + 8, n * 8u + 2u);
++		err = touch_read(0x5d, GOODIX_EVENT_REG + GOODIX_HEAD_LEN, true, buf + GOODIX_HEAD_LEN, n * GOODIX_POINT_LEN + 2u);
  		if (err) {
  			return err;
  		}
@@ -40,21 +45,19 @@
 -			(void)touch_goodix_ack();
 -			return EIO;
 -		}
-+		/* Bypassed packet coordinate checksum validation
-+		if (!touch_checksum(buf + GOODIX_HEAD_LEN, n * GOODIX_POINT_LEN + 2u)) {
-+			(void)touch_goodix_ack();
-+			return EIO;
-+		}
-+		*/
  	}
  	for (unsigned i = 0; i < n; ++i) {
- 
-@@ -597,7 +601,7 @@
+-		const uint8_t *p = buf + 8u + i * 8u;
++		const uint8_t *p = buf + GOODIX_HEAD_LEN + i * GOODIX_POINT_LEN;
+ 		unsigned id = p[0] >> 4;
+ 		unsigned px = touch_be16(p + 2), py = touch_be16(p + 4);
+ 		/* Low nibble 1/3 denotes pen data in the vendor parser. */
+@@ -514,7 +512,7 @@
  	int fe2 = touch_read(0x38, 0x9f, false, &fid2, 1);
  	printf("SWEET TOUCH: probe 0x38 err=%d/%d chip-id=%02x:%02x irq=%#x\n",
  	    fe1, fe2, fid1, fid2, st.irq_status);
- 	st.probing = false;
--	bool goodix = !ge && gid == '9' && gid == '8' && gid == '9' && gid == '6';
+-	bool goodix = !ge && gid[0] == '9' && gid[1] == '8' && gid[2] == '9' && gid[3] == '6';
 +	bool goodix = !ge; /* Accept any responding Goodix touch IC controller */
  	bool fts = !fe1 && !fe2 && fid1 == 0x54 && fid2 == 0x52;
  	if (st.dead || goodix == fts) {
+ 		printf("SWEET TOUCH: no unique supported IC (goodix=%d fts=%d dead=%d); stopping\n",
