@@ -27,7 +27,7 @@
 +		return EIO;
 +	}
 +	*/
- 	unsigned n = buf[2] & 15u;
+ 	unsigned n = buf & 15u;
  	if (n > TOUCH_MAX) {
  
 @@ -409,10 +411,12 @@
@@ -50,11 +50,12 @@
  	for (unsigned i = 0; i < n; ++i) {
  
 @@ -597,7 +601,7 @@
+ 	int fe2 = touch_read(0x38, 0xa3, false, &fid2, 1);
  	int fe2 = touch_read(0x38, 0x9f, false, &fid2, 1);
  	printf("SWEET TOUCH: probe 0x38 err=%d/%d chip-id=%02x:%02x irq=%#x\n",
  	    fe1, fe2, fid1, fid2, st.irq_status);
  	st.probing = false;
--	bool goodix = !ge && gid[0] == '9' && gid[1] == '8' && gid[2] == '9' && gid[3] == '6';
+-	bool goodix = !ge && gid == '9' && gid == '8' && gid == '9' && gid == '6';
 +	bool goodix = !ge; /* Accept any responding Goodix touch IC controller */
  	bool fts = !fe1 && !fe2 && fid1 == 0x54 && fid2 == 0x52;
  	if (st.dead || goodix == fts) {
