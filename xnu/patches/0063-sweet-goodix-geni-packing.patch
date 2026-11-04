@@ -230,9 +230,11 @@
  		return 0; /* no new touch frame: retain current contacts */
  	}
 -	if (!touch_checksum(buf, 8)) {
+/*
 +	if (!touch_checksum(buf, GOODIX_HEAD_LEN)) {
  		return EIO; /* header untrusted: no write to the IC */
  	}
+  */
  	unsigned n = buf[2] & 15u;
 @@ -341,17 +409,18 @@
  		return EIO;
