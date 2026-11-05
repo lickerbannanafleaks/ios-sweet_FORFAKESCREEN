@@ -4,19 +4,35 @@ on:
   workflow_dispatch:
     inputs:
       macos_version:
-        description: macOS release whose xnu to build (13.5 = xnu-8796, iOS 16 era)
+        description: "macOS source release to build (13.5 = XNU 8796 / iOS 16 era)"
+        required: true
         default: "13.5"
+        type: choice
+        options:
+          - "13.5"
       kernel_config:
-        description: RELEASE / DEVELOPMENT / DEBUG
+        description: "XNU kernel configuration"
+        required: true
         default: DEVELOPMENT
+        type: choice
+        options:
+          - DEVELOPMENT
+          - RELEASE
+          - DEBUG
       machine_config:
-        description: xnu MACHINE_CONFIG
+        description: "XNU MACHINE_CONFIG for the iOS-sweet target"
+        required: true
         default: SWEET
+        type: string
       keep_going:
-        description: make -k (collect all compile errors in one run)
-        default: "true"
+        description: "Continue compiling after errors (make -k)"
+        required: true
+        default: false
+        type: boolean
+
   push:
-    branches: [main]
+    branches:
+      - main
     paths:
       - "xnu/patches/**"
       - ".github/workflows/xnu.yml"
@@ -28,97 +44,305 @@ concurrency:
 env:
   DXB_REPO: https://github.com/blacktop/darwin-xnu-build
   DXB_SHA: 663906528d1cd5ea8fde7de6f16de73db9511549
+
+  # iOS-sweet build target. The Mac mini is Intel, but the kernel target is ARM64.
   MACOS_VERSION: ${{ inputs.macos_version || '13.5' }}
   KERNEL_CONFIG: ${{ inputs.kernel_config || 'DEVELOPMENT' }}
+  ARCH_CONFIG: ARM64
   MACHINE_CONFIG: ${{ inputs.machine_config || 'SWEET' }}
+
+  # KDK matching macOS 13.5 build 22G74.
+  KDKROOT: /Library/Developer/KDKs/KDK_13.5_22G74.kdk
+
+  # Avoid Homebrew trying to update the manually pinned Intel Homebrew checkout.
+  HOMEBREW_NO_AUTO_UPDATE: "1"
 
 jobs:
   build:
-    # macos-14 still ships Xcode 15.x: its iig matches the xnu-8796 IORPC ABI
-    # (Xcode 16's iig emits IORPC.kernelContent, which this xnu lacks)
+    # Your 2018 Intel Mac mini: GitHub runner labels are macOS + X64.
     runs-on: [self-hosted, macOS, X64]
-    timeout-minutes: 120
-    steps:
-      - uses: actions/checkout@v4
+    timeout-minutes: 240
 
-      - name: Fetch build script
+    steps:
+      - name: Check out ios-sweet
+        uses: actions/checkout@v4
+
+      - name: Select Xcode 15
+        shell: bash
         run: |
+          set -euo pipefail
+
+          # Prefer /Applications/Xcode.app. Also support versioned app names.
+          if [[ -d "/Applications/Xcode.app/Contents/Developer" ]]; then
+            XCODE_APP="/Applications/Xcode.app"
+          elif [[ -d "/Applications/Xcode_15.0.app/Contents/Developer" ]]; then
+            XCODE_APP="/Applications/Xcode_15.0.app"
+          else
+            XCODE_APP="$(find /Applications -maxdepth 1 -type d \
+              -name 'Xcode*.app' -print | sort -V | head -n 1)"
+          fi
+
+          if [[ -z "${XCODE_APP:-}" || ! -d "$XCODE_APP/Contents/Developer" ]]; then
+            echo "::error::Xcode.app was not found in /Applications."
+            exit 1
+          fi
+
+          DEVELOPER_DIR="$XCODE_APP/Contents/Developer"
+          echo "DEVELOPER_DIR=$DEVELOPER_DIR" >> "$GITHUB_ENV"
+
+          echo "Selected Xcode: $XCODE_APP"
+          DEVELOPER_DIR="$DEVELOPER_DIR" xcodebuild -version
+
+          SDK_PATH="$(DEVELOPER_DIR="$DEVELOPER_DIR" xcrun --sdk macosx --show-sdk-path)"
+          SDK_VERSION="$(DEVELOPER_DIR="$DEVELOPER_DIR" xcrun --sdk macosx --show-sdk-version)"
+          echo "macOS SDK: $SDK_VERSION ($SDK_PATH)"
+          echo "SDKROOT=$SDK_PATH" >> "$GITHUB_ENV"
+
+          if [[ ! -d "$SDK_PATH" ]]; then
+            echo "::error::The selected macOS SDK directory does not exist."
+            exit 1
+          fi
+
+          DEVELOPER_DIR="$DEVELOPER_DIR" xcrun --find clang
+          DEVELOPER_DIR="$DEVELOPER_DIR" xcrun --find iig
+          DEVELOPER_DIR="$DEVELOPER_DIR" xcrun --find mig
+
+          echo "Installed macOS SDKs:"
+          ls -1 "$XCODE_APP/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs"
+
+      - name: Configure Intel Homebrew for the runner
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          # The Intel Homebrew checkout used on this Mac mini is /usr/local/Homebrew.
+          if [[ -x /usr/local/Homebrew/bin/brew ]]; then
+            BREW="/usr/local/Homebrew/bin/brew"
+
+            # darwin-xnu-build resets PATH and expects Intel Homebrew binaries
+            # in /usr/local/bin, so ensure the standard Intel brew entry exists.
+            if [[ ! -x /usr/local/bin/brew ]]; then
+              sudo ln -s "$BREW" /usr/local/bin/brew
+            fi
+          elif [[ -x /usr/local/bin/brew ]]; then
+            BREW="/usr/local/bin/brew"
+          else
+            echo "::error::brew not found. Expected /usr/local/Homebrew/bin/brew or /usr/local/bin/brew."
+            exit 1
+          fi
+
+          eval "$("$BREW" shellenv)"
+          echo "/usr/local/bin" >> "$GITHUB_PATH"
+          echo "/usr/local/sbin" >> "$GITHUB_PATH"
+
+          "$BREW" --version
+          "$BREW" --prefix
+          echo "Runner architecture: $(uname -m)"
+          echo "Homebrew executable: $BREW"
+
+      - name: Install build dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          # xcodes is installed as a real executable because build.sh checks it.
+          # Xcode itself is already installed and selected in the previous step.
+          brew install jq gum xcodes bash cmake ninja
+
+          for tool in brew jq gum xcodes bash cmake ninja git make; do
+            echo "---- $tool ----"
+            command -v "$tool"
+          done
+
+          echo "---- macOS ----"
+          sw_vers
+
+          echo "---- Xcode ----"
+          xcodebuild -version
+
+          echo "---- SDK ----"
+          xcrun --sdk macosx --show-sdk-path
+
+          echo "---- KDK ----"
+          if [[ -d "$KDKROOT" ]]; then
+            echo "Found $KDKROOT"
+          else
+            echo "::warning::KDK 13.5 (22G74) is not installed yet. The pinned build script will try to download and install it; the runner account must be able to use sudo non-interactively."
+          fi
+
+      - name: Fetch and prepare XNU build script
+        shell: bash
+        run: |
+          set -euo pipefail
+
           git init -q dxb
           git -C dxb fetch -q --depth 1 "$DXB_REPO" "$DXB_SHA"
           git -C dxb checkout -q FETCH_HEAD
-          # 12.5-14.3 use the top-level patches dir; ours go next to blacktop's
-          cp xnu/patches/*.patch xnu/patches/*.sh dxb/patches/
-          # libfirehose_kernel is built arm64e-only; the SWEET kernel is plain arm64
-          sed -i '' 's/ARCHS="x86_64 arm64e" VALID_ARCHS="x86_64 arm64e"/ARCHS="x86_64 arm64e arm64" VALID_ARCHS="x86_64 arm64e arm64"/' dxb/build.sh
-          grep -c 'VALID_ARCHS="x86_64 arm64e arm64"' dxb/build.sh
-          ls dxb/patches
 
-      - name: Deps
-        run: |
-          brew install jq gum bash cmake ninja
-          # build.sh only checks that xcodes exists (Xcode is preinstalled); no bottle on macOS 14
-          printf '#!/bin/sh\nexit 0\n' | sudo tee /usr/local/bin/xcodes >/dev/null
-          sudo chmod +x /usr/local/bin/xcodes
-          sw_vers
-          ls -d /Applications/Xcode*.app
-          XC=$(ls -d /Applications/Xcode_*.app | sort -V | head -1)
-          echo "DEVELOPER_DIR=$XC/Contents/Developer" >> "$GITHUB_ENV"
-          sudo xcode-select -s "$XC"
-          xcodebuild -version
-          xcrun --find iig
+          if [[ ! -f dxb/build.sh ]]; then
+            echo "::error::The pinned darwin-xnu-build checkout does not contain build.sh."
+            exit 1
+          fi
 
-      - name: Build
+          mkdir -p dxb/patches
+
+          # Copy this repository's SWEET/iOS patches into the directory that
+          # the pinned darwin-xnu-build script applies for macOS 13.5.
+          if [[ -d xnu/patches ]]; then
+            while IFS= read -r -d '' file; do
+              cp "$file" dxb/patches/
+            done < <(find xnu/patches -maxdepth 1 -type f \
+              \( -name '*.patch' -o -name '*.sh' \) -print0)
+          else
+            echo "::error::This repository has no xnu/patches directory."
+            exit 1
+          fi
+
+          echo "Patches staged for XNU:"
+          ls -la dxb/patches
+
+          # SWEET is plain ARM64. The upstream libfirehose_kernel target is
+          # x86_64 + arm64e by default; include arm64 for this target.
+          sed -i '' \
+            's/ARCHS="x86_64 arm64e" VALID_ARCHS="x86_64 arm64e"/ARCHS="x86_64 arm64e arm64" VALID_ARCHS="x86_64 arm64e arm64"/' \
+            dxb/build.sh
+
+          if ! grep -Fq 'ARCHS="x86_64 arm64e arm64" VALID_ARCHS="x86_64 arm64e arm64"' dxb/build.sh; then
+            echo "::error::Could not apply the SWEET ARM64 libfirehose build adjustment."
+            exit 1
+          fi
+
+          # The upstream script hardcodes -j8. This 4-core / 16-GB Mac mini
+          # uses -j4 to reduce memory pressure during compilation.
+          sed -i '' 's/make install -j8/make install -j4/g' dxb/build.sh
+
+          echo "Build script prepared:"
+          grep -nE 'ARCHS="x86_64 arm64e arm64"|make install -j[0-9]+' dxb/build.sh
+
+      - name: Build XNU for iOS-sweet
         working-directory: dxb
+        shell: bash
         env:
-          # keep going after errors so one run reports every compile failure
-          MAKEFLAGS: ${{ inputs.keep_going == 'false' && '' || '-k' }}
-        run: bash build.sh
-
-      - name: Package build tree for local compiles
-        if: always()
+          MAKEFLAGS: ${{ inputs.keep_going == true && '-k' || '' }}
+          # Keep the build system's internal kernel configuration parallelism low
+          # on the i3 / 16-GB runner.
+          KERNEL_PARALLELISM_OVERRIDE: "1"
         run: |
-          # Generated headers, config option headers, mig output and the patched
-          # source: enough to re-run any single compile command from the log locally.
-          SDK=$(xcrun --sdk macosx --show-sdk-path)
-          mkdir -p sdk-kernel-platform
-          cp -R "$SDK/System/Library/Frameworks/Kernel.framework/Versions/A/PrivateHeaders/platform" sdk-kernel-platform/ || true
-          tar czf buildtree.tgz \
-            --exclude='*.o' --exclude='*.cpo' --exclude='*.a' --exclude='*.dSYM' --exclude='*.unstripped' \
-            --exclude='kernel.development.*' --exclude='.git' \
-            -C dxb build/xnu.obj fakeroot/usr/local/include xnu \
-            -C .. sdk-kernel-platform
-          ls -la buildtree.tgz
+          set -euo pipefail
 
-      - uses: actions/upload-artifact@v4
+          echo "Building macOS/XNU source version: $MACOS_VERSION"
+          echo "Target: $KERNEL_CONFIG $ARCH_CONFIG $MACHINE_CONFIG"
+          echo "Host: $(uname -m) / $(sw_vers -productVersion)"
+          echo "KDK: $KDKROOT"
+
+          bash build.sh
+
+          EXPECTED_KERNEL="build/xnu.obj/kernel.$(echo "$KERNEL_CONFIG" | tr '[:upper:]' '[:lower:]').$(echo "$MACHINE_CONFIG" | tr '[:upper:]' '[:lower:]')"
+          if [[ ! -f "$EXPECTED_KERNEL" ]]; then
+            echo "::error::build.sh returned without producing $EXPECTED_KERNEL."
+            exit 1
+          fi
+
+          echo "Successfully produced:"
+          ls -lh "$EXPECTED_KERNEL"
+
+      - name: Package build tree for local debugging
         if: always()
+        shell: bash
+        run: |
+          set -u
+
+          mkdir -p sdk-kernel-platform
+          SDK_PATH="${SDKROOT:-}"
+
+          if [[ -z "$SDK_PATH" || ! -d "$SDK_PATH" ]]; then
+            SDK_PATH="$(xcrun --sdk macosx --show-sdk-path 2>/dev/null || true)"
+          fi
+
+          # This private header directory is optional and is absent from some
+          # Xcode SDK layouts. Its absence must not fail artifact packaging.
+          PLATFORM_HEADERS="$SDK_PATH/System/Library/Frameworks/Kernel.framework/Versions/A/PrivateHeaders/platform"
+          if [[ -n "$SDK_PATH" && -d "$PLATFORM_HEADERS" ]]; then
+            cp -R "$PLATFORM_HEADERS" sdk-kernel-platform/
+          else
+            echo "::warning::Kernel PrivateHeaders/platform is not present in this SDK; skipping optional copy."
+          fi
+
+          TAR_ARGS=()
+          for path in build/xnu.obj fakeroot/usr/local/include xnu; do
+            if [[ -e "dxb/$path" ]]; then
+              TAR_ARGS+=(-C dxb "$path")
+            else
+              echo "::warning::Not archiving missing path: dxb/$path"
+            fi
+          done
+
+          TAR_ARGS+=(-C . sdk-kernel-platform)
+
+          tar czf buildtree.tgz \
+            --exclude='*.o' \
+            --exclude='*.cpo' \
+            --exclude='*.a' \
+            --exclude='*.dSYM' \
+            --exclude='*.unstripped' \
+            --exclude='kernel.development.*' \
+            --exclude='.git' \
+            "${TAR_ARGS[@]}"
+
+          ls -lh buildtree.tgz
+
+      - name: Inspect installed KDK support libraries
+        if: always()
+        shell: bash
+        run: |
+          mkdir -p out/kdk-libs
+          shopt -s nullglob
+          LIBS=(/Library/Developer/KDKs/*/System/Library/KernelSupport/lib*.a)
+
+          for lib in "${LIBS[@]}"; do
+            name="$(basename "$lib" .a)"
+            ar t "$lib" > "out/kdk-libs/$name.members.txt" 2>&1 || true
+            nm -m "$lib" > "out/kdk-libs/$name.nm.txt" 2>&1 || true
+            lipo -info "$lib" >> out/kdk-libs/arch.txt 2>&1 || true
+          done
+
+          ls -la out/kdk-libs
+
+      - name: Collect kernel output
+        if: always()
+        shell: bash
+        run: |
+          mkdir -p out
+
+          if [[ -d dxb/fakeroot/System/Library/Kernels ]]; then
+            cp -R dxb/fakeroot/System/Library/Kernels/. out/
+          else
+            echo "::warning::The kernel output directory was not created."
+          fi
+
+          if [[ -d dxb/build/xnu.obj ]]; then
+            find dxb/build/xnu.obj -maxdepth 1 -type f -name 'kernel.*' -exec cp {} out/ \;
+          fi
+
+          ls -lah out
+          if compgen -G 'out/kernel.*' > /dev/null; then
+            (cd out && shasum -a 256 kernel.* > SHA256SUMS)
+          fi
+
+      - name: Upload XNU build tree
+        if: always()
+        uses: actions/upload-artifact@v4
         with:
           name: xnu-buildtree
           path: buildtree.tgz
+          if-no-files-found: warn
           retention-days: 7
 
-      - name: Inspect closed KDK support libs
+      - name: Upload iOS-sweet kernel artifacts
         if: always()
-        run: |
-          mkdir -p out/kdk-libs
-          for lib in /Library/Developer/KDKs/*/System/Library/KernelSupport/lib*.a; do
-            b=$(basename "$lib" .a)
-            ar t "$lib" > "out/kdk-libs/$b.members.txt" 2>&1 || true
-            nm -m "$lib" > "out/kdk-libs/$b.nm.txt" 2>&1 || true
-            lipo -info "$lib" >> out/kdk-libs/arch.txt 2>&1 || true
-          done
-          ls -la out/kdk-libs
-
-      - name: Collect
-        if: always()
-        run: |
-          mkdir -p out
-          cp -R dxb/fakeroot/System/Library/Kernels/. out/ 2>/dev/null || true
-          ls -la out
-          (cd out && shasum -a 256 kernel.* > SHA256SUMS) || true
-
-      - uses: actions/upload-artifact@v4
-        if: always()
+        uses: actions/upload-artifact@v4
         with:
-          name: xnu-kernel
+          name: xnu-kernel-ios-sweet
           path: out/
           if-no-files-found: warn
+          retention-days: 7
