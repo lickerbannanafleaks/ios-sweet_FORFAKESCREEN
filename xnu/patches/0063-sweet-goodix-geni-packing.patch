@@ -11,7 +11,7 @@ index c9d0605..b9a265e 100644
   */
  #if defined(ARM64_BOARD_CONFIG_SWEET)
  #include <sys/param.h>
-@@ -32,6 +32,11 @@ void sweet_touch_init(void);
+@@ -32,6 +32,13 @@ void sweet_touch_init(void);
  #define TOUCH_MAX        10u
  #define TOUCH_GOODIX     1
  #define TOUCH_FTS        2
@@ -20,10 +20,12 @@ index c9d0605..b9a265e 100644
 +#define GOODIX_EVENT_REG 0x4180u
 +#define GOODIX_HEAD_LEN  8u
 +#define GOODIX_POINT_LEN 8u
++/* Aftermarket GT9896 panels may omit the Yellowstone header checksum. */
++#define GOODIX_TOLERATE_BAD_HEADER_CHECKSUM 1u
  
  #define SE_STATUS       0x040u
  #define SE_MCLK         0x048u
-@@ -52,18 +57,30 @@ void sweet_touch_init(void);
+@@ -52,18 +59,30 @@ void sweet_touch_init(void);
  #define SE_RX_COUNT     0x804u
  #define SE_HW_TX        0xe24u
  #define SE_HW_RX        0xe28u
@@ -59,7 +61,7 @@ index c9d0605..b9a265e 100644
  	int x[TOUCH_MAX], y[TOUCH_MAX];
  } st;
  static int touch_sleep_chan;
-@@ -187,9 +204,18 @@ touch_abort(void)
+@@ -187,9 +206,18 @@ touch_abort(void)
  	}
  }
  
@@ -79,7 +81,7 @@ index c9d0605..b9a265e 100644
      unsigned nr, bool stretch)
  {
  	if (st.dead || nt > 3 || nr > 90 || (nt && nr) || (!nt && !nr)) {
-@@ -200,14 +226,13 @@ touch_msg(uint8_t addr, const uint8_t *tx, unsigned nt, uint8_t *rx,
+@@ -200,14 +228,13 @@ touch_msg(uint8_t addr, const uint8_t *tx, unsigned nt, uint8_t *rx,
  		return EBUSY;
  	}
  	touch_wr(st.se, SE_IRQ_CLR, 0xffffffffu);
@@ -96,7 +98,7 @@ index c9d0605..b9a265e 100644
  		if (irq & SE_ERRORS) {
  			err = (irq & SE_NACK) ? ENXIO : EIO;
  			/* A completed NACK is normal during address probing. Aborting an
-@@ -215,7 +240,7 @@ touch_msg(uint8_t addr, const uint8_t *tx, unsigned nt, uint8_t *rx,
+@@ -215,7 +242,7 @@ touch_msg(uint8_t addr, const uint8_t *tx, unsigned nt, uint8_t *rx,
  			 * and leave a clean idle engine available for the other IC. */
  			for (unsigned j = 0; j < 5000 && !(irq & SE_DONE); ++j) {
  				delay(1);
@@ -105,7 +107,7 @@ index c9d0605..b9a265e 100644
  			}
  			if ((irq & SE_DONE) && !(touch_rd(st.se, SE_STATUS) & 1u) &&
  			    !(touch_rd(st.se, SE_TX_COUNT) & 0xfffffffu) &&
-@@ -225,42 +250,68 @@ touch_msg(uint8_t addr, const uint8_t *tx, unsigned nt, uint8_t *rx,
+@@ -225,42 +252,68 @@ touch_msg(uint8_t addr, const uint8_t *tx, unsigned nt, uint8_t *rx,
  			}
  			break;
  		}
@@ -181,12 +183,12 @@ index c9d0605..b9a265e 100644
  static int
  touch_read(uint8_t addr, uint16_t reg, bool wide, uint8_t *buf, unsigned len)
  {
-@@ -277,10 +328,32 @@ touch_read(uint8_t addr, uint16_t reg, bool wide, uint8_t *buf, unsigned len)
+@@ -277,10 +330,32 @@ touch_read(uint8_t addr, uint16_t reg, bool wide, uint8_t *buf, unsigned len)
  static int
  touch_goodix_ack(void)
  {
--	const uint8_t ack[3] = {0x41, 0x80, 0};
-+	const uint8_t ack[3] = {GOODIX_EVENT_REG >> 8, GOODIX_EVENT_REG & 0xffu, 0};
+-	const uint8_t ack[] = {0x41, 0x80, 0};
++	const uint8_t ack[] = {GOODIX_EVENT_REG >> 8, GOODIX_EVENT_REG & 0xffu, 0};
  	return touch_msg(0x5d, ack, sizeof(ack), NULL, 0, false);
  }
  
@@ -215,7 +217,7 @@ index c9d0605..b9a265e 100644
  static unsigned
  touch_be16(const uint8_t *p)
  {
-@@ -290,6 +363,9 @@ touch_be16(const uint8_t *p)
+@@ -290,6 +365,9 @@ touch_be16(const uint8_t *p)
  static bool
  touch_checksum(const uint8_t *buf, unsigned len)
  {
@@ -225,7 +227,7 @@ index c9d0605..b9a265e 100644
  	unsigned sum = 0;
  	for (unsigned i = 0; i + 2 < len; ++i) {
  		sum += buf[i];
-@@ -297,6 +373,32 @@ touch_checksum(const uint8_t *buf, unsigned len)
+@@ -297,6 +375,32 @@ touch_checksum(const uint8_t *buf, unsigned len)
  	return (sum & 0xffffu) == touch_be16(buf + len - 2);
  }
  
@@ -258,7 +260,7 @@ index c9d0605..b9a265e 100644
  static void
  touch_report(uint32_t mask, const int *x, const int *y)
  {
-@@ -321,53 +423,101 @@ touch_goodix(void)
+@@ -321,51 +425,135 @@ touch_goodix(void)
  	uint8_t buf[90];
  	int x[TOUCH_MAX] = {0}, y[TOUCH_MAX] = {0};
  	uint32_t mask = 0;
@@ -344,14 +346,23 @@ index c9d0605..b9a265e 100644
 +	    return 0;
 +	}
 +
-+	/* Validate the header independently. */
-+	if (!touch_checksum(buf, GOODIX_HEAD_LEN)) {
-+	    touch_goodix_diag("header-checksum", EIO, buf, GOODIX_HEAD_LEN);
-+	    (void)touch_goodix_ack();
-+	    return EIO;
-+	}
-+
++	/*
++	 * Yellowstone normally has an independent header checksum. Some
++	 * aftermarket GT9896 panels return a zero checksum here despite a
++	 * plausible touch header. Permit only a plain touch event with at
++	 * least one bounded contact; the contact-data checksum below must
++	 * still pass before any coordinates are reported.
++	 */
 +	unsigned n = buf[2] & 0x0fu;
++	if (!touch_checksum(buf, GOODIX_HEAD_LEN)) {
++	    if (!GOODIX_TOLERATE_BAD_HEADER_CHECKSUM || buf[0] != 0x80u ||
++	        n == 0 || n > TOUCH_MAX) {
++	        touch_goodix_diag("header-checksum", EIO, buf, GOODIX_HEAD_LEN);
++	        (void)touch_goodix_ack();
++	        return EIO;
++	    }
++	    touch_goodix_diag("header-checksum-ignored", EIO, buf, GOODIX_HEAD_LEN);
++	}
 +
 +	if (n > TOUCH_MAX) {
 +	    touch_goodix_diag("contact-count", EIO, buf, GOODIX_HEAD_LEN);
@@ -378,7 +389,7 @@ index c9d0605..b9a265e 100644
 +	            true,
 +	            buf + offset,
 +	            remaining_len
-+	          );
++	        );
 +
 +	        if (err) {
 +	            touch_goodix_diag("points-xfer", err,
@@ -430,7 +441,7 @@ index c9d0605..b9a265e 100644
  }
  
  static int
-@@ -449,16 +561,25 @@ touch_se_init(void)
+@@ -449,16 +642,25 @@ touch_se_init(void)
  	touch_wr(st.se, SE_CLK_SEL, 0);
  	touch_wr(st.se, SE_MCLK, (7u << 4) | 1u);
  	touch_wr(st.se, SE_SCL, (10u << 20) | (11u << 10) | 26u); /* 100 kHz */
@@ -462,7 +473,7 @@ index c9d0605..b9a265e 100644
  	if ((touch_rd(st.se, SE_TX_COUNT) & 0xfffffffu) ||
  	    (touch_rd(st.se, SE_RX_COUNT) & 0x1ffffffu)) {
  		printf("SWEET TOUCH: inherited FIFO data; probes skipped\n");
-@@ -511,14 +632,17 @@ touch_thread(void *arg, wait_result_t result)
+@@ -511,14 +713,17 @@ touch_thread(void *arg, wait_result_t result)
  	touch_wait(2);
  	touch_gpio(8, 0, 3, 3, true, true);
  	touch_wait(300); /* exceeds vendor 5 ms test + 95 ms post-test wait */
