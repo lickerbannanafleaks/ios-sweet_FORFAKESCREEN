@@ -83,7 +83,11 @@ jobs:
         env:
           # keep going after errors so one run reports every compile failure
           MAKEFLAGS: ${{ inputs.keep_going == 'false' && '' || '-k' }}
-        run: bash build.sh
+        run: |
+          export PATH="/opt/local/bin:/opt/local/sbin:$PATH"
+          echo "jq: $(command -v jq)"
+          jq --version
+          bash build.sh
 
       - name: Package build tree for local compiles
         if: always()
