@@ -185,7 +185,7 @@
  static int
  touch_goodix_ack(void)
  {
--	const uint8_t ack[3] = {0x41, 0x80, 0};
+-	const uint8_t ack = {0x41, 0x80, 0};
 +	const uint8_t ack[] = {GOODIX_EVENT_REG >> 8, GOODIX_EVENT_REG & 0xffu, 0};
  	return touch_msg(0x5d, ack, sizeof(ack), NULL, 0, false);
  }
