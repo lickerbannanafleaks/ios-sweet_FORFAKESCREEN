@@ -76,7 +76,7 @@ jobs:
           MAKEFLAGS: ${{ inputs.keep_going == 'false' && '' || '-k' }}
         run: bash build.sh
 
-       - name: Package build tree for local compiles
+      - name: Package build tree for local compiles
         if: always()
         run: |
           SDK=$(xcrun --sdk macosx --show-sdk-path)
