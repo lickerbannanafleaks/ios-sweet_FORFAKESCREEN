@@ -26,6 +26,7 @@ concurrency:
   cancel-in-progress: true
 
 env:
+  $HOMEBREW_NO_AUTO_UPDATE=1
   DXB_REPO: https://github.com/blacktop/darwin-xnu-build
   DXB_SHA: 663906528d1cd5ea8fde7de6f16de73db9511549
   MACOS_VERSION: ${{ inputs.macos_version || '13.5' }}
