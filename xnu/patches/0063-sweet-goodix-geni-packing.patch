@@ -61,7 +61,7 @@ index c9d0605..b9a265e 100644
  	int x[TOUCH_MAX], y[TOUCH_MAX];
  } st;
  static int touch_sleep_chan;
-@@ -187,11 +206,20 @@ touch_abort(void)
+@@ -187,9 +206,18 @@ touch_abort(void)
  	}
  }
  
